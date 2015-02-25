@@ -1,0 +1,243 @@
+function parameters = spmpc_testH0(P_controls, P_patients, P_mask, xmax, ymax, zmax, alpha_value, Nboot)
+
+% this function create a boostraped confidence interval from a single group
+% please note that the more bootstrap you do the more acurate is the CI but
+% also the more demanding it is for your computer; this can take several
+% days/weeks - although not accecible via the gui you can try the spmpc_ci_test
+% function which compute for you on three different voxels in CI with 1000 bootstraps
+% this next return a curve which estimate how many bootstrap to use and how
+% long this will take ...
+% return a 5D matrix boorCI(5,2,x,y,z)
+% 5 CI for the last 2000 resamples
+% 2 for lowe and upper bounds
+% x,y,z spatial coordinates
+%
+% cyril pernet 14/03/2008 v2
+
+%%arguments to pass on
+%P_controls = spm_select(Inf,'.*\.img$','Select control group Images');
+%P_patients = spm_select(Inf,'.*\.img$','Select patient group Images');
+%P_mask = spm_select(1,'.*\.img$','Select mask');
+%xmax = 91;
+%ymax = 109;
+%zmax =91;
+%alpha_value = 5/100; 
+%Nboot = 100;
+
+
+%% initialize variables
+
+disp('testing H0 .........')
+disp('initialize variables')
+global defaults
+spm_defaults
+
+
+Nboot_sample = 100; % number of samples to run
+Nbimage = size(P_controls,1) + size(P_patients,1);
+
+classification = zeros(5,xmax,ymax,zmax,size(P_patients,1));
+bootCI=zeros(5,2,xmax,ymax,zmax);
+Image = zeros(xmax,ymax,zmax,Nbimage);
+
+threasholds = [Nboot-2000; Nboot-1500; Nboot-1000; Nboot-500; Nboot];
+low = round(alpha_value.*threasholds./2);
+high = threasholds - low;
+mkdir('tmp')
+cd tmp
+
+
+
+%% get the data
+
+V_controls  = spm_vol(P_controls); 
+Image(:,:,:,1:size(P_controls,1)) = spm_read_vols(V_controls);
+V_patients  = spm_vol(P_patients); 
+Image(:,:,:,size(P_controls,1)+1:size(Image,4)) = spm_read_vols(V_patients);
+V_mask      = spm_vol(P_mask);    
+Mask     = spm_read_vols(V_mask);
+
+% for n=1:Nbimage
+%     Image(:,:,:,n) = Image(:,:,:,n) .* Mask;
+% end
+
+
+%% create a random selection to create groups
+
+for l=1:Nboot_sample
+    bootindex_sample(:,l) = ceil( rand(Nbimage,1)*Nbimage ); 
+end
+
+
+bootindex_controls = bootindex_sample(1:size(P_controls,1),:);
+bootindex_patients = bootindex_sample(size(P_controls,1)+1:size(bootindex_sample,1),:);
+clear P_controls P_patients V_controls V_patients Controls Patients bootindex_sample
+
+
+%% compute CI and classify
+
+timea = clock;
+
+for sample = 1:Nboot_sample
+
+    % ----------------------------
+%%    % conpute the CI at each voxel 
+    % ----------------------------
+    
+    fprintf('Evaluate sample %g',sample); disp(' ');
+    bootCI=zeros(5,2,xmax,ymax,zmax);
+    Controls = Image(:,:,:,bootindex_controls(:,sample)); % images of the control group (random selection)
+    
+    for l=1:Nboot
+        bootindex(:,l) = ceil( rand(size(Controls,4),1)*size(Controls,4) ); % random samples from the control group
+    end
+
+    spm_progress_bar('Init',100,'Computing bootstrapped CI','% slices completed')
+    l=1:Nboot;
+
+    for k= 1:zmax;
+
+        percent = k/zmax*100;
+        fprintf('%g percent of CI computed',percent); disp(' ')
+        
+        for j= 1:ymax;
+            for i= 1:xmax;
+
+                if Mask(i,j,k) > 0
+                    tempdata = squeeze(Controls(i,j,k,bootindex(:,l))); % for 1 voxel, vector of data * Nboot
+                    data = zeros(size(Controls,4),Nboot); % reorganize tempdata into a matrix data
+                    data(:,1) = tempdata(1:size(Controls,4)); 
+                    index = 1;
+                    for c = 2:Nboot
+                        data(:,c) = tempdata((size(Controls,4)*(c-1))+1 : size(Controls,4)*c);
+                    end
+                    tempboot = mean(data,1); % means of the Nboot samples for the voxel(i,j,k)
+                    bootsort=sort(tempboot);
+                    bootCI(:,1,i,j,k) = bootsort(low+1); % low bound
+                    bootCI(:,2,i,j,k) = bootsort(high); % high bound
+                    clear tempdata tempboot 
+                end
+
+            end % close the loop for x
+        end % close the loop for y
+
+        spm_progress_bar('Set',percent);
+
+    end % close the loop for z
+    clear Controls
+    
+    % ----------------------------
+%%    % conpute the classifcation 
+    % ----------------------------
+
+    Patients = Image(:,:,:,bootindex_patients(:,sample)); % images of the patient group (random selection - other guys than Controls)
+    spm_progress_bar('Init',100,'Computing','% subjects classified')
+    index =1;
+
+    for iteration = 1:5
+        fprintf('iteration %g --------------------',iteration); disp(' ')
+        down = squeeze(bootCI(iteration,1,:,:,:));
+        up   = squeeze(bootCI(iteration,2,:,:,:));
+
+        for subject=1:size(Patients,4)
+            fprintf('subject %g',subject);disp(' ');
+            percent=(index)/(5*size(Patients,4))*100;
+            spm_progress_bar('Set',percent);
+
+            tmp = squeeze(classification(iteration,:,:,:,subject)); % just to create it before filling
+            tmp = (squeeze(Patients(:,:,:,subject)) < down) + (squeeze(Patients(:,:,:,subject)) > up); % down+up, no /2 a voxel is either above or below
+            classification(iteration,:,:,:,subject) = tmp;
+            clear tmp
+            index = index+1;
+        end
+        disp('classication done ')
+    end
+
+    name = sprintf('classification%g',sample);
+    save ([name],'classification'); % 5D matrix with the classification of each subject (dim 5) at each CI (dim 1)
+    
+end % close the bootstrap
+
+timeb = clock;
+diff = timeb - timea;
+fprintf('classification under H0 done in %s days %s hours %s min',num2str(diff(3)), num2str(diff(4)), num2str(diff(5)));
+disp(' ');
+
+save image_parameters Nboot_sample xmax ymax zmax
+
+
+%% read the classifications and average
+
+clear all % need some memory here
+global defaults
+spm_defaults
+load image_parameters
+H0_classification = zeros(Nboot_sample,xmax,ymax,zmax);
+
+disp(' compute the final classications ....')
+disp(' averaging across CI ................')
+disp(' ')
+
+for data=1:Nboot_sample
+    matrix = sprintf('classification%g.mat',data);
+    fprintf('processing %s',matrix); disp(' ');
+    load(matrix)
+    
+    new_classification1 = squeeze(classification(1,:,:,:,:)); % first CI = 4D matrix
+    abnormal1 = (sum(new_classification1,4)./size(classification,5)*100); % sum across subjects
+    clear new_classification1
+
+    new_classification2 = squeeze(classification(2,:,:,:,:));
+    abnormal2 = (sum(new_classification2,4)./size(classification,5)*100);
+    clear new_classification2
+
+    new_classification3 = squeeze(classification(3,:,:,:,:));
+    abnormal3 = (sum(new_classification3,4)./size(classification,5)*100);
+    clear new_classification3
+
+    new_classification4 = squeeze(classification(4,:,:,:,:));
+    abnormal4 = (sum(new_classification4,4)./size(classification,5)*100);
+    clear new_classification4
+
+    new_classification5 = squeeze(classification(5,:,:,:,:));
+    abnormal5 = (sum(new_classification5,4)./size(classification,5)*100);
+    clear new_classification5
+
+    H0_classification(data,:,:,:) = (abnormal1+abnormal2+abnormal3+abnormal4+abnormal5)./5;
+    clear abnormal1 abnormal2 abnormal3 abnormal4 abnormal5 classification matrix
+    % delete(matrix)
+end
+    
+cd ..
+save H0_classification H0_classification
+% rmdir tmp
+
+
+%% estimate the parameters
+
+disp('conpute maximum likelihood parameters at each voxels')
+spm_progress_bar('Init',100,'estimating normal parameters','% slices completed')
+parameters = zeros(xmax,ymax,zmax,2);
+
+for k=1:zmax
+    percent = k/zmax*100
+    
+    for j= 1:ymax;
+        for i= 1:xmax;
+
+            if squeeze(sum(H0_classification(:,i,j,k),1)) > 0
+                tmp = mle('normal',squeeze(H0_classification(:,i,j,k)));
+                parameters(i,j,k,1) = tmp(1);
+                parameters(i,j,k,2) = tmp(2);
+            end
+
+        end % close the loop for x
+    end % close the loop for yj
+    
+
+    spm_progress_bar('Set',percent);
+
+end % close the loop for z
+
+save parameters parameters
+
