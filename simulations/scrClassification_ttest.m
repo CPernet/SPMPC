@@ -1,15 +1,16 @@
 % In this script the comparison between a classification and a t-test with
 % normally distributed univariate samples will be compared. Concretely,
 % Control and Test sets sampled from a Normal distribution with given  mean 
-% and std (in the Parameters section) will be used. Concretely:
+% and std (in the Parameters section) is used. 
 %
-% a) Classification: The control set will be used to create a bootstrap CI
-% of the means. After that, the classification will consist on looking if
-% the mean of each test set falls into the CI or not.
+% a) Classification: The control set is used to create a bootstrap CI
+% of the means or maximim likelihood CI. After that, the classification 
+% consists in looking if each patient falls into the CI or not. A bootstrap
+% under H0 is then performed to compute the significance of the
+% classification result.
 %
-% b) t-test: Will assess whether the mean of the test sets can be assumed 
+% b) t-test: assess whether the mean of the test sets can be assumed 
 % to be equal to mu or not.
-%
 
 clear all
 clc
@@ -156,4 +157,20 @@ xlabel('Delta');
 ylabel('% of rejection');
 grid on
 
+figure;
+data = reshape(cell2mat(nb_abnormal_patients_ci),1000,size(nb_abnormal_patients_ci,2));
+plot(delta,mean(data,1),'LineWidth',3)
+hold on; grid on; axis tight;
+data = reshape(cell2mat(nb_abnormal_patients_ml),1000,size(nb_abnormal_patients_ml,2));
+plot(delta,mean(data,1),'r','LineWidth',3)
+title('classification rate','FontSize',16)
+legend('Classification ci', 'Claasification ml');
+xlabel('Delta'); ylabel('nb of rejection');
+
+save delta delta
+save resultsClassif_ci resultsClassif_ci
+save resultsClassif_ml resultsClassif_ml
+save resultsTtest resultsTtest
+save nb_abnormal_patients_ci nb_abnormal_patients_ci
+save nb_abnormal_patients_ml nb_abnormal_patients_ml
 
